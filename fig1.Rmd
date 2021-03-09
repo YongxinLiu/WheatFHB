@@ -1,0 +1,276 @@
+---
+title: "Figure 1. Microbial community description"
+author: "Yong-Xin Liu"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = T, echo=T, comment="#>", message=F, warning=F,
+	fig.align="center", fig.width=6, fig.height=4, dpi=150)
+# Clean workspace
+rm(list=ls()) 
+# Install & load R packages in CRAN
+p_list = c("ggplot2", "BiocManager", "devtools")
+for(p in p_list){if (!requireNamespace(p)){install.packages(p)}
+    library(p, character.only = TRUE, quietly = TRUE, warn.conflicts = FALSE)}
+# Install & load R packages in Bioconductor
+if (!requireNamespace("ggtree", quietly = TRUE))
+    BiocManager::install("ggtree")
+# Install & load R packages in github
+library(devtools)
+if(!requireNamespace("amplicon", quietly = TRUE))
+  install_github("microbiota/amplicon")
+suppressWarnings(suppressMessages(library(amplicon)))
+
+# Load home-made scripts and set parameters
+# source("http://210.75.224.110/stat_plot_functions.R")
+dir.create("fig1",showWarnings = F)
+# Output figure width and height (unit in mm)
+w=89
+h=59
+```
+
+## OTU table stat
+
+```{r}
+# Set group ID in metadata
+metadata=read.table("data/metadata.txt", header=T, row.names=1, sep="\t")
+group="group"
+```
+
+```{r}
+dat=read.table("data/otutab.txt", header=T, row.names=1, sep="\t")
+# Stat OTU table
+# 4912 OTUs，195 samples
+dim(dat)
+# We obtained 49,457,306 high-quality reads from 195 samples (ranging from 5,933 to 547,412 reads, with an average of 253,627 reads per sample)
+colsum = colSums(dat)
+sum(colsum)
+summary(colsum)
+
+# This resulted in 4912 OTUs (mean: 1787  OTUs per perithecium sample; 976 OTUs per rice stubble sample; 3179 OTUs per rhizosphere soil sample; Supplementary Data x).
+binDat=dat
+binDat[binDat >= 1]=1
+sub_group=subset(metadata, group %in% c("Soil"))
+summary(colSums(binDat[,rownames(sub_group)]))
+sub_group=subset(metadata, group %in% c("Straw"))
+summary(colSums(binDat[,rownames(sub_group)]))
+sub_group=subset(metadata, group %in% c("Perithecium"))
+summary(colSums(binDat[,rownames(sub_group)]))
+```
+
+## Alpha diversity
+
+### Boxplot of richness & shannon_e index
+
+```{r}
+alpha=read.table("data/alpha.txt", header=T, row.names=1, sep="\t")
+
+# richness, shannon_e
+alpha_index="richness"
+(p=alpha_boxplot(alpha, index=alpha_index, metadata, groupID=group))
+p=p+theme(legend.position="NA")+xlab("Compartment")+ylab("Richness")
+# Save figure in pdf
+ggsave(paste0("fig1/alpha_boxplot_",alpha_index,".pdf"), p, width=w*0.55, height=h, units="mm")
+
+alpha_index="shannon_e"
+(p=alpha_boxplot(alpha, index=alpha_index, metadata, groupID=group))
+p=p+theme(legend.position="NA")+xlab("Compartment")+ylab("Shannon")
+ggsave(paste0("fig1/alpha_boxplot_",alpha_index,".pdf"), p, width=w*0.5, height=h, units="mm")
+```
+
+### Rarefaction curve
+
+```{r alpha_rare, fig.show='asis', fig.width=4, fig.height=2.5}
+alpha=read.table("data/alpha_rare.txt", header=T, row.names=1, sep="\t")
+(p=alpha_rare_curve(alpha, metadata, groupID=group))
+# Adjust legend in top left corner 
+p=p+theme(legend.position=c(0.15,0.9))
+ggsave("fig1/alpha_rarefaction_curve.pdf", p, width=w, height=h, units="mm")
+```
+
+## Beta diversity
+
+### PCoA based on Bray-Cutis distance
+
+```{r}
+m="bray_curtis"
+beta=read.table(paste("data/beta_",m,".txt",sep=""), header=T, row.names=1, sep="\t")
+(p=beta_pcoa(beta, metadata, "group"))
+(p=p+theme(legend.position=c(0.5,0.9)))
+ggsave(paste("fig1/b.pcoa_", m, ".pdf", sep=""), p, width=w, height=h, units="mm")
+beta_pcoa_stat(beta, metadata, "group")
+```
+
+## Taxonomy composition
+
+```{R library}
+library("ggplot2")
+library("ggdendro")
+library(phyloseq)
+library(tidyverse)
+library(ggtree)
+library( ggstance)
+# library(amplicon)
+vegan_otu =  function(physeq){
+  OTU =  otu_table(physeq)
+  if(taxa_are_rows(OTU)){
+    OTU =  t(OTU)
+  }
+  return(as(OTU,"matrix"))
+}
+
+vegan_tax <-  function(physeq){
+  tax <-  tax_table(physeq)
+  
+  return(as(tax,"matrix"))
+}
+```
+
+Read data
+
+```{R}
+metadata = read.table("data/metadata.txt", header=T, row.names=1, sep="\t", comment.char="", stringsAsFactors = F)
+colnames(metadata)[1]="Group"
+otutab = read.table("data/otutab.txt", header=T, row.names=1, sep="\t", comment.char="", stringsAsFactors = F)
+taxonomy = read.table("data/taxonomy_8.txt", header=T, row.names=1, sep="\t", comment.char="", stringsAsFactors = F)
+
+# Extract only those ID in common between the two tables
+idx = rownames(metadata) %in% colnames(otutab)
+metadata = metadata[idx,]
+otutab = otutab[,rownames(metadata)]
+idx = rownames(otutab) %in% rownames(taxonomy)
+otutab = otutab[idx,]
+taxonomy = taxonomy[rownames(otutab),]
+```
+
+### Calculate replicate average in each site and compartment
+
+```{R}
+metadata$groupID = paste0(metadata$Group, metadata$field)
+metadata2 = dplyr::distinct(metadata[,-4])
+metadata2$groupID = paste0(metadata2$Group, metadata2$field)
+rownames(metadata2) = metadata2$groupID
+write.table("ID\t", file=paste("data/metadata_group.txt",sep=""),append = F, quote = F, eol = "", row.names = F, col.names = F)
+suppressWarnings(write.table(metadata2, file=paste("data/metadata_group.txt",sep=""), append = T, quote = F, sep="\t", eol = "\n", na = "NA", dec = ".", row.names = T, col.names = T))
+
+# group by group
+tmp = as.data.frame(t(otutab))
+tmp$group = metadata[rownames(tmp),]$groupID
+library(dplyr)
+dat2 = tmp %>% group_by(group) %>% summarise_all(mean)
+dat2 = as.data.frame(dat2)
+rownames(dat2) = dat2$group
+dat2 = dat2[,-1]
+otutab = as.data.frame(t(dat2))
+metadata = metadata2
+
+write.table("ID\t", file=paste("data/otutab_group.txt",sep=""),append = F, quote = F, eol = "", row.names = F, col.names = F)
+suppressWarnings(write.table(otutab, file=paste("data/otutab_group.txt",sep=""), append = T, quote = F, sep="\t", eol = "\n", na = "NA", dec = ".", row.names = T, col.names = T))
+
+# Phylum include class in Proteobactera
+idx = taxonomy$Phylum %in% "Proteobacteria"
+taxonomy[idx,]$Phylum = taxonomy[idx,]$Class
+
+# as phyloseq(ps) object
+ps = phyloseq(sample_data(metadata),otu_table(as.matrix(otutab), taxa_are_rows=TRUE), tax_table(as.matrix(taxonomy)))
+```
+
+### ggtree plot tree
+
+```{R}
+dist = "bray"
+ps1_rela = transform_sample_counts(ps, function(x) x / sum(x) )
+otu = as.data.frame(t(vegan_otu(ps1_rela)))
+
+unif = phyloseq::distance(ps1_rela , method=dist)
+hc <- hclust(unif, method = "complete")
+clus <- cutree(hc, 3)
+d = data.frame(label = names(clus), 
+               member = factor(clus))
+map = as.data.frame(sample_data(ps))
+dd = merge(d,map,by = "row.names",all = F)
+row.names(dd) = dd$Row.names 
+dd$Row.names = NULL
+dd[1:3,1:3]
+p  = ggtree(hc) %<+% dd + 
+  geom_tippoint(size=3, shape=21, aes(fill=factor(Group), x=x)) + 
+  # geom_tiplab(aes(label=Group), size=3, hjust=.5) +
+  geom_tiplab(aes(color = Group,x=x*1.2), hjust=1)
+  # theme_dendrogram(plot.margin=margin(6,6,80,6))# 这是聚类图形的layout
+p
+```
+
+### Taxonomy composition
+
+```{R}
+# set parameters
+i = ps 
+j = "Phylum" 
+rep = 6 
+Top = 12 
+tran = TRUE
+
+psdata = i %>% tax_glom(taxrank = j)
+
+if (tran == TRUE) {
+  psdata = psdata%>% transform_sample_counts(function(x) {x/sum(x)} )
+}
+
+otu = otu_table(psdata)
+tax = tax_table(psdata)
+tax[1:3,1:7]
+
+for (i in 1:dim(tax)[1]) {
+  
+  if (tax[i,j] %in% c("Actinobacteria_Gp1","Actinobacteria_Gp3","Unclassified","Subdivision3")) {
+    tax[i,j] = "Other"
+  }else if (row.names(tax)[i] %in% names(sort(rowSums(otu), decreasing = TRUE)[1:Top])) {
+    tax[i,j] =tax[i,j]
+  }else {
+    tax[i,j]= "Other"
+  }
+}
+tax_table(psdata)= tax
+
+Taxonomies <- psdata %>% psmelt()
+Taxonomies$Abundance = Taxonomies$Abundance * 100
+
+Taxonomies$OTU = NULL
+colnames(Taxonomies)[1] = "id"
+
+library(ggnewscale)
+p <- p + new_scale_fill()
+p
+```
+
+### Stackplot+Tree
+
+```{R}
+Taxonomies$Phylum = factor(Taxonomies$Phylum, levels = c("Acidobacteria", "Actinobacteria", "Bacteroidetes", "Firmicutes",    "Alphaproteobacteria","Betaproteobacteria",  "Deltaproteobacteria","Gammaproteobacteria","Nitrospirae","Planctomycetes"      ,"Verrucomicrobia","Other"))
+p3 <- facet_plot(p, panel = 'Stacked Barplot', data = Taxonomies, geom = geom_barh,mapping = aes(x = Abundance, fill = Phylum),color = "black",stat='identity' )   
+p3
+
+library(RColorBrewer)
+display.brewer.all()
+p4 = p3 + scale_fill_brewer(palette = "Paired")
+p4
+ggsave(paste0("fig1/stackplot_Phylum_group_full.pdf"), p4, width = 183, height = 150, units = "mm")
+```
+
+
+
+
+
+
+
+
+
+
+

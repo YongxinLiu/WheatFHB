@@ -1,0 +1,5 @@
+Tue Mar 09 18:38:44 2021
+Soil	Perithecium	9.99900009999e-05
+Soil	Straw	9.99900009999e-05
+Perithecium	Straw	9.99900009999e-05
+
